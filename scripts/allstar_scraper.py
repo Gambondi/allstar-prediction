@@ -3,98 +3,91 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import time
 
-def scrape_allstar_voting_data(start_year, end_year, output_file="data/manual/allstar_data.csv"):
+def scrape_allstar_data(start_year, end_year, output_file="data/manual/allstar_data.csv"):
     """
-    Scrapes NBA All-Star voting selections from Basketball Reference and saves the data to a CSV.
+    Scrapes NBA All-Star stats from Basketball Reference from 2000 to 2024.
     
     Args:
     - start_year (int): The first season year to scrape (e.g., 2000).
-    - end_year (int): The last season year to scrape (e.g., 2023).
-    - output_file (str): Path to save the All-Star voting data.
+    - end_year (int): The last season year to scrape (e.g., 2024).
+    - output_file (str): Path to save the All-Star data as CSV.
     """
     allstar_data = []
+    request_count = 0  # Track number of requests
 
-    # Define the possible positions and conferences
-    sections = {
-        "Frontcourt Eastern Conference": "frontcourt-eastern-conference",
-        "Backcourt Eastern Conference": "backcourt-eastern-conference",
-        "Frontcourt Western Conference": "frontcourt-western-conference",
-        "Backcourt Western Conference": "backcourt-western-conference"
-    }
-
-    request_count = 0  # Track the number of requests
     for year in range(start_year, end_year + 1):
-        for section_name, section_slug in sections.items():
-            url = f'https://www.basketball-reference.com/allstar/NBA_{year}_voting-{section_slug}.html'
-            print(f"Scraping {url}...")
+        url = f'https://www.basketball-reference.com/allstar/NBA_{year}.html'
+        print(f"Scraping {url}...")
 
-            try:
-                # If we've made 20 requests, wait for a minute
-                if request_count >= 20:
-                    print("Rate limit reached. Waiting for a minute...")
-                    time.sleep(60)  # Sleep for 60 seconds
-                    request_count = 0  # Reset the count
+        # Rate limiting: Pause after every 20 requests
+        if request_count >= 20:
+            print("Rate limit reached. Pausing for 1 minute...")
+            time.sleep(60)  # Sleep for 60 seconds
+            request_count = 0  # Reset the request count
 
-                response = requests.get(url)
-                request_count += 1
+        response = requests.get(url)
+        request_count += 1
 
-                if response.status_code == 404:
-                    print(f"Could not access {url}. Status code: {response.status_code}")
-                    continue  # Skip to the next URL if the page doesn't exist
-                elif response.status_code == 429:
-                    print(f"Rate limited at {url}. Status code: 429")
-                    print("Waiting for an hour due to rate limiting...")
-                    time.sleep(3600)  # Wait for 1 hour if rate-limited
-                    continue
+        if response.status_code == 404:
+            print(f"Could not access {url}. Status code: 404")
+            continue
+        elif response.status_code == 429:
+            print(f"Rate limited. Status code: 429. Waiting for an hour...")
+            time.sleep(3600)  # Wait 1 hour if rate-limited
+            continue
 
-                soup = BeautifulSoup(response.content, 'html.parser')
+        soup = BeautifulSoup(response.content, 'html.parser')
 
-                # Find the table containing player data
-                table = soup.find('table')
-                if table:
-                    rows = table.find('tbody').find_all('tr')
-                    print(f"Found {len(rows)} rows in {section_name} for year {year}.")
-                    
-                    for row in rows:
-                        player_name_td = row.find('td', {'data-stat': 'player_name'})
-                        if player_name_td:
-                            player_name = player_name_td.text.strip()
+        # Determine which table IDs to use based on the year
+        if 2018 <= year < 2024:
+            if year == 2018:
+                teams = ['Team LeBron', 'Team Stephen']
+            elif year in [2019, 2020, 2023]:
+                teams = ['Team LeBron', 'Team Giannis']
+            elif year in [2021, 2022]:
+                teams = ['Team LeBron', 'Team Durant']
+        else:
+            teams = ['East', 'West']  # For years before 2018 and for 2024 (back to East vs. West)
 
-                            # Extract other statistics
-                            fan_votes_td = row.find('td', {'data-stat': 'fan_votes'})
-                            player_votes_td = row.find('td', {'data-stat': 'player_votes'})
-                            media_votes_td = row.find('td', {'data-stat': 'media_votes'})
-                            fan_votes = fan_votes_td.text.strip() if fan_votes_td else None
-                            player_votes = player_votes_td.text.strip() if player_votes_td else None
-                            media_votes = media_votes_td.text.strip() if media_votes_td else None
+        # Scrape the table data
+        for team in teams:
+            # Use the team name directly without removing spaces
+            table = soup.find('table', {'id': team})  
+            if table:
+                tbody = table.find('tbody')  # Access <tbody>
+                rows = tbody.find_all('tr')  # Get all rows
+                print(f"Found {len(rows)} rows for {team} in year {year}.")
 
-                            # Append player info and votes to the list
-                            allstar_data.append({
-                                'year': year,
-                                'player_name': player_name,
-                                'fan_votes': fan_votes,
-                                'player_votes': player_votes,
-                                'media_votes': media_votes,
-                                'section': section_name,  # Keep track of backcourt/frontcourt and conference
-                                'is_allstar': 1  # Mark as All-Star
-                            })
-                else:
-                    print(f"Table not found for {section_name} in year {year}.")
-            except Exception as e:
-                print(f"Error occurred while scraping {url}: {e}")
-            
-            # Add a delay of 3 seconds between requests to avoid rate limiting
-            time.sleep(3)
+                for row in rows:
+                    # Access player name from <th> tag using the 'csk' attribute
+                    player_name_th = row.find('th', {'data-stat': 'player'})
+                    if player_name_th:
+                        player_name = player_name_th.get('csk', '').strip()  # Extract from csk
 
-    # Convert list of All-Star data to a DataFrame
+                        # Extract other statistics (team, points, etc.)
+                        team_td = row.find('td', {'data-stat': 'team_id'})
+                        team_name = team_td.text.strip() if team_td else team
+                        points_td = row.find('td', {'data-stat': 'pts'})
+                        points = points_td.text.strip() if points_td else None
+
+                        # Append data to the list with binary All-Star indicator
+                        allstar_data.append({
+                            'year': year,
+                            'team': team_name,
+                            'player_name': player_name,
+                            'points': points,
+                            'is_allstar': 1  # Automatically set to 1 as this is an All-Star player
+                        })
+            else:
+                print(f"No table found for {team} in year {year}.")
+
+        # Add a delay of 3 seconds between each request to avoid rate-limiting
+        time.sleep(3)
+
+    # Convert data to a DataFrame and save as CSV
     allstar_df = pd.DataFrame(allstar_data)
-
-    # Print DataFrame to verify if it's populated
-    print(allstar_df)
-
-    # Save the data to a CSV file
     allstar_df.to_csv(output_file, index=False)
-    print(f"All-Star voting data saved to {output_file}")
+    print(f"All-Star data saved to {output_file}")
 
 if __name__ == "__main__":
-    scrape_allstar_voting_data(2000, 2023)
+    scrape_allstar_data(2000, 2024)
